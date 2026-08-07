@@ -406,27 +406,33 @@ v2Router.get("/:name+/blobs/:digest", async (req, env: Env, context: ExecutionCo
   const registriesList = registries(env);
   for (const registry of registriesList) {
     const client = new RegistryHTTPClient(env, registry);
-    const response = await client.getLayer(name, digest);
+    const response = await client.getLayer(name, digest, range);
     if ("response" in response) {
       continue;
     }
 
     layerResponse = response;
-    const [s1, s2] = layerResponse.stream.tee();
-    layerResponse.stream = s1;
-    context.waitUntil(
-      (async () => {
-        const [response, err] = await wrap(env.REGISTRY_CLIENT.monolithicUpload(name, digest, s2, layerResponse.size));
-        if (err) {
-          console.error("Error uploading asynchronously the layer ", digest, "into main registry");
-          return;
-        }
+    // Only cache full-object responses. A ranged/partial upstream response must never be written to
+    // R2 as if it were the complete blob, or the cached object would be corrupt.
+    if (range === undefined && layerResponse.contentRange === undefined) {
+      const fullLayer = layerResponse;
+      const [s1, s2] = fullLayer.stream.tee();
+      fullLayer.stream = s1;
+      context.waitUntil(
+        (async () => {
+          const [response, err] = await wrap(env.REGISTRY_CLIENT.monolithicUpload(name, digest, s2, fullLayer.size));
+          if (err) {
+            console.error("Error uploading asynchronously the layer ", digest, "into main registry");
+            return;
+          }
 
-        if (response === false) {
-          console.error("Layer might be too big for the registry client", layerResponse.size);
-        }
-      })(),
-    );
+          if (response === false) {
+            console.error("Layer might be too big for the registry client", fullLayer.size);
+          }
+        })(),
+      );
+    }
+
     break;
   }
 
