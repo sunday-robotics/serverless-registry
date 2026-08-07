@@ -154,15 +154,31 @@ You can also set your `docker.io` credentials in the configuration to not have a
 
 When a layer is pulled through the fallback, it is copied into your R2 bucket so the next pull is
 served directly from R2. Layers up to 5GiB are cached inline during that first pull. Larger layers
-can't be written to R2 in a single operation, so they are instead cached by a background job backed
-by [Cloudflare Queues](https://developers.cloudflare.com/queues/): the pull is served immediately,
-and the Worker enqueues a small job (registry, name, digest) whose consumer streams the layer into
-R2 as a multipart upload, reading from the upstream registry in ranges. This step is optional — if
-the queue is not configured, large layers are simply served from the fallback on every pull without
-being cached.
+can't be written to R2 in a single operation, so they are cached by a background job backed by
+[Cloudflare Queues](https://developers.cloudflare.com/queues/): the pull is served immediately, and
+the Worker enqueues a small job (registry, name, digest).
 
-To enable it, create the queue and bind it in your wrangler config as both a producer and a
-consumer:
+Rather than move the whole multi-GiB blob in a single queue invocation (which cannot finish within a
+Worker's CPU/wall-clock budget and leaves orphaned multipart uploads behind), the job is split into
+many small, resumable steps coordinated by a metadata object stored in R2:
+
+- **start** — creates one R2 multipart upload targeting the final `blobs/<digest>` key, writes the
+  upload metadata (upload id, part plan, status), and enqueues the first window of part messages.
+- **upload-part** — each message fetches just its byte range from the upstream registry (`Range`
+  request) and uploads that single R2 part, recording its ETag. It is idempotent: an already-uploaded
+  part is skipped, so at-least-once delivery and redelivery never corrupt the object.
+- **finalize** — once every part is recorded, completes the multipart upload (atomically publishing
+  the object at its content-addressable key) and deletes the tracking metadata.
+
+A **Cron Trigger** runs a `scheduled` cleanup that walks every tracked upload and either completes a
+fully-uploaded-but-unfinalized one, or — for uploads that have made no progress for longer than the
+stale threshold (default 5 minutes) — aborts the multipart upload, deletes its tracking, and
+re-enqueues a fresh start so caching eventually succeeds.
+
+This step is optional — if the queue is not configured, large layers are simply served from the
+fallback on every pull without being cached.
+
+To enable it, create the queue, bind it as both a producer and a consumer, and add the cron trigger:
 
 ```bash
 $ npx wrangler queues create blob-cache
@@ -174,8 +190,9 @@ $ npx wrangler queues create blob-cache
   "production": {
     "queues": {
       "producers": [{ "binding": "BLOB_CACHE_QUEUE", "queue": "blob-cache" }],
-      "consumers": [{ "queue": "blob-cache", "max_batch_size": 1, "max_retries": 5 }]
-    }
+      "consumers": [{ "queue": "blob-cache", "max_batch_size": 10, "max_retries": 5, "max_concurrency": 6 }]
+    },
+    "triggers": { "crons": ["*/2 * * * *"] }
   }
 }
 ```
@@ -188,13 +205,38 @@ queue = "blob-cache"
 
 [[env.production.queues.consumers]]
 queue = "blob-cache"
-max_batch_size = 1
+max_batch_size = 10
 max_retries = 5
+max_concurrency = 6
+
+[triggers]
+crons = ["*/2 * * * *"]
 ```
 
 The binding name must be `BLOB_CACHE_QUEUE` and the queue name must match the one used in code
 (`blob-cache`). The upstream registry must support ranged reads (`Range` requests); if it doesn't,
 the large layer is not cached.
+
+The behavior is tunable through optional vars (defaults shown):
+
+| Var                               | Default              | Meaning                                                                                                                                                                  |
+| --------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `BLOB_CACHE_PART_SIZE`            | `268435456` (256MiB) | Target size of each multipart part. Clamped to R2's 5MiB–5GiB range and automatically grown for very large blobs so the part count never exceeds R2's 10,000-part limit. |
+| `BLOB_CACHE_STALE_ABORT_MS`       | `300000` (5min)      | How long an upload may make no progress before the cron cleanup aborts and restarts it.                                                                                  |
+| `BLOB_CACHE_MAX_CONCURRENT_PARTS` | `6`                  | Sliding-window size: how many `upload-part` messages are kept in flight per blob.                                                                                        |
+
+256MiB parts keep each `upload-part` invocation to a single ~256MiB range fetch streamed straight
+into R2 (never buffered), which stays comfortably inside a Worker's CPU/wall-clock limits and well
+under the 128MB memory cap. A 5GiB layer becomes ~20 parts.
+
+> **Recommended backstop:** add an R2 lifecycle rule to _abort incomplete multipart uploads_ after
+> ~1 day. The cron cleanup handles every upload it can see via its metadata, but the Workers R2
+> binding cannot list or abort multipart uploads that were never tracked (e.g. left by a crash
+> before metadata was written). The lifecycle rule is the only way to reclaim those:
+>
+> ```bash
+> $ npx wrangler r2 bucket lifecycle add <bucket> --prefix "" --abort-multipart-days 1
+> ```
 
 ### Known limitations
 

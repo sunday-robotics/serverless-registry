@@ -9,7 +9,14 @@ import type { ReferrerDescriptor, Registry, GetLayerResponse, BlobRangeRequest }
 import { isDockerDotIO, RegistryHTTPClient } from "../src/registry/http";
 import { ManifestSchema } from "../src/manifest";
 import { limit } from "../src/chunk";
-import { R2Registry } from "../src/registry/r2";
+import {
+  BlobCacheConfig,
+  BlobCacheMessage,
+  cleanupBlobCacheUploads,
+  finalizeBlobCacheUpload,
+  startBlobCacheUpload,
+  uploadBlobCachePart,
+} from "../src/registry/cache";
 import worker from "../index";
 import { env } from "cloudflare:workers";
 import { createExecutionContext, reset, waitOnExecutionContext } from "cloudflare:test";
@@ -2432,9 +2439,36 @@ describe("blob range requests", () => {
 });
 
 describe("background layer caching", () => {
-  // A fake upstream registry that serves ranged reads from an in-memory buffer, mimicking GHCR.
+  const CACHE_PREFIX = "_blob_cache";
+  const testConfig: BlobCacheConfig = {
+    // R2 requires every part except the last to be >= 5MiB, so use the minimum part size. A blob
+    // just over one part exercises the multi-part start -> upload-part -> finalize flow.
+    partSize: 5 * 1024 * 1024,
+    staleAbortMs: 5 * 60 * 1000,
+    maxConcurrentParts: 2,
+  };
+
+  // An in-memory queue capturing the fan-out of start/upload-part/finalize messages.
+  function fakeQueue() {
+    const messages: BlobCacheMessage[] = [];
+    return {
+      messages,
+      async send(body: BlobCacheMessage) {
+        messages.push(body);
+      },
+      async sendBatch(batch: Iterable<{ body: BlobCacheMessage }>) {
+        for (const m of batch) messages.push(m.body);
+      },
+    };
+  }
+
+  // A fake upstream registry that serves HEAD (layerExists) and ranged reads from an in-memory
+  // buffer, mimicking GHCR.
   function fakeUpstream(bytes: Uint8Array, digest: string, honorRange = true): Registry {
     return {
+      async layerExists(_name: string, _digest: string) {
+        return { exists: true, size: bytes.length, digest };
+      },
       async getLayer(_name: string, _digest: string, range?: BlobRangeRequest): Promise<GetLayerResponse> {
         if (range === undefined || !honorRange) {
           return { stream: new Blob([bytes]).stream(), size: bytes.length, digest };
@@ -2452,43 +2486,142 @@ describe("background layer caching", () => {
     } as unknown as Registry;
   }
 
-  test("multipartUpload caches a blob via multipart and verifies its digest", async () => {
-    const bindings = env as Env;
+  // Drives a start message all the way to completion by processing the queue until it drains,
+  // exactly like the real consumer would across many invocations.
+  async function drain(bindings: Env, source: Registry, queue: ReturnType<typeof fakeQueue>) {
+    async function process(msg: BlobCacheMessage) {
+      if (msg.type === "finalize") {
+        await finalizeBlobCacheUpload(bindings, testConfig, msg);
+      } else if (msg.type === "start") {
+        await startBlobCacheUpload(bindings, testConfig, source, msg);
+      } else {
+        await uploadBlobCachePart(bindings, testConfig, source, msg);
+      }
+    }
+
+    let guard = 0;
+    while (queue.messages.length > 0) {
+      if (guard++ > 10000) throw new Error("drain did not converge");
+      const msg = queue.messages.shift()!;
+      await process(msg);
+    }
+  }
+
+  test("caches a >5GiB-style blob across chunked, resumable messages", async () => {
+    const queue = fakeQueue();
+    const bindings = { ...(env as Env), BLOB_CACHE_QUEUE: queue } as unknown as Env;
     const name = "cache-mp";
-    const content = "the quick brown fox jumps over the lazy dog, repeated a few times over.";
+    const registry = "https://example.com";
+    // Just over the 5MiB part size yields two parts (5MiB + a small last part).
+    const content = "x".repeat(5 * 1024 * 1024 + 1024);
     const bytes = new TextEncoder().encode(content);
     const digest = await getSHA256(content);
+    const source = fakeUpstream(bytes, digest);
 
-    const r2 = new R2Registry(bindings);
-    const result = await r2.multipartUpload(name, digest, bytes.length, fakeUpstream(bytes, digest));
-    expect("response" in result).toBeFalsy();
+    await startBlobCacheUpload(bindings, testConfig, source, { type: "start", registry, name, digest });
+    await drain(bindings, source, queue);
 
     // The blob is readable through the normal GET path and matches the original bytes.
     const res = await fetch(createRequest("GET", `/v2/${name}/blobs/${digest}`, null));
     expect(res.ok).toBeTruthy();
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
 
-    // The temporary multipart object was cleaned up.
-    const temp = await bindings.REGISTRY.head(`${name}/blobs/uploads/_cache-${digest}`);
-    expect(temp).toBeNull();
+    // All tracking (metadata + per-part objects) was cleaned up on completion.
+    const tracking = await bindings.REGISTRY.list({ prefix: `${CACHE_PREFIX}/${name}/${digest}/` });
+    expect(tracking.objects.length).toEqual(0);
 
     await bindings.REGISTRY.delete(`${name}/blobs/${digest}`);
   });
 
-  test("multipartUpload refuses to cache when the upstream ignores the range", async () => {
-    const bindings = env as Env;
-    const name = "cache-norange";
-    const content = "upstream that does not support ranged reads";
+  test("is idempotent under redelivery and never corrupts the object", async () => {
+    const queue = fakeQueue();
+    const bindings = { ...(env as Env), BLOB_CACHE_QUEUE: queue } as unknown as Env;
+    const name = "cache-idempotent";
+    const registry = "https://example.com";
+    const content = "y".repeat(5 * 1024 * 1024 + 512);
     const bytes = new TextEncoder().encode(content);
     const digest = await getSHA256(content);
+    const source = fakeUpstream(bytes, digest);
 
-    const r2 = new R2Registry(bindings);
-    const result = await r2.multipartUpload(name, digest, bytes.length, fakeUpstream(bytes, digest, false));
-    expect("response" in result).toBeTruthy();
+    await startBlobCacheUpload(bindings, testConfig, source, { type: "start", registry, name, digest });
+    await drain(bindings, source, queue);
+
+    // Re-deliver a fresh start plus stray part/finalize messages: they must be no-ops.
+    await startBlobCacheUpload(bindings, testConfig, source, { type: "start", registry, name, digest });
+    await uploadBlobCachePart(bindings, testConfig, source, {
+      type: "upload-part",
+      registry,
+      name,
+      digest,
+      partNumber: 1,
+    });
+    await finalizeBlobCacheUpload(bindings, testConfig, { type: "finalize", registry, name, digest });
+    await drain(bindings, source, queue);
+
+    const res = await fetch(createRequest("GET", `/v2/${name}/blobs/${digest}`, null));
+    expect(res.ok).toBeTruthy();
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+
+    await bindings.REGISTRY.delete(`${name}/blobs/${digest}`);
+  });
+
+  test("upload-part refuses to cache when the upstream ignores the range", async () => {
+    const queue = fakeQueue();
+    const bindings = { ...(env as Env), BLOB_CACHE_QUEUE: queue } as unknown as Env;
+    const name = "cache-norange";
+    const registry = "https://example.com";
+    const content = "z".repeat(40);
+    const bytes = new TextEncoder().encode(content);
+    const digest = await getSHA256(content);
+    const source = fakeUpstream(bytes, digest, false);
+
+    await startBlobCacheUpload(bindings, testConfig, source, { type: "start", registry, name, digest });
+    // Processing the first part must throw so the message is retried instead of writing a corrupt part.
+    const partMsg = queue.messages.find((m) => m.type === "upload-part")!;
+    await expect(uploadBlobCachePart(bindings, testConfig, source, partMsg)).rejects.toThrow();
 
     // Nothing was written to the content-addressable key.
     const cached = await bindings.REGISTRY.head(`${name}/blobs/${digest}`);
     expect(cached).toBeNull();
+
+    await bindings.REGISTRY.delete(`${CACHE_PREFIX}/${name}/${digest}/meta.json`).catch(() => {});
+  });
+
+  test("cron cleanup aborts a stalled upload and re-enqueues a fresh start", async () => {
+    const queue = fakeQueue();
+    const bindings = { ...(env as Env), BLOB_CACHE_QUEUE: queue } as unknown as Env;
+    const name = "cache-cleanup";
+    const registry = "https://example.com";
+    const digest = `sha256:${"a".repeat(64)}`;
+    const key = `${name}/blobs/${digest}`;
+    const metaPath = `${CACHE_PREFIX}/${name}/${digest}/meta.json`;
+
+    // Simulate a stalled upload: a real multipart upload with metadata whose last activity is old.
+    const upload = await bindings.REGISTRY.createMultipartUpload(key);
+    const stale = Date.now() - 10 * 60 * 1000;
+    const meta = {
+      version: 1,
+      registry,
+      name,
+      digest,
+      key,
+      uploadId: upload.uploadId,
+      totalSize: 100,
+      partSize: 5 * 1024 * 1024,
+      totalParts: 1,
+      status: "in-progress",
+      createdAt: stale,
+      updatedAt: stale,
+    };
+    await bindings.REGISTRY.put(metaPath, JSON.stringify(meta), {
+      httpMetadata: { contentType: "application/json" },
+    });
+
+    await cleanupBlobCacheUploads(bindings, testConfig);
+
+    // The stalled tracking was cleared and a fresh start was enqueued so caching can succeed.
+    expect(await bindings.REGISTRY.head(metaPath)).toBeNull();
+    expect(queue.messages.some((m) => m.type === "start" && m.digest === digest)).toBeTruthy();
   });
 });
 

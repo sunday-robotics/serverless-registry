@@ -8,7 +8,12 @@ import v2Router from "./src/router";
 import { authenticationMethodFromEnv } from "./src/authentication-method";
 import { Registry } from "./src/registry/registry";
 import { R2Registry } from "./src/registry/r2";
-import { BlobCacheMessage, handleBlobCacheBatch, blobCacheQueueName } from "./src/registry/cache";
+import {
+  BlobCacheMessage,
+  handleBlobCacheBatch,
+  handleBlobCacheCleanup,
+  blobCacheQueueName,
+} from "./src/registry/cache";
 
 // A full compatibility mode means that the r2 registry will try its best to
 // help the client on the layer push. See how we let the client push layers with chunked uploads for more information.
@@ -29,6 +34,13 @@ export interface Env {
   BLOB_CACHE_QUEUE?: Queue<BlobCacheMessage>;
   // Optional override for the blob cache queue name; defaults to "blob-cache".
   BLOB_CACHE_QUEUE_NAME?: string;
+  // Optional tuning knobs for the background blob cache (all numeric strings). See src/registry/cache.ts.
+  // Target size in bytes for each multipart part (default 256MiB, clamped to R2's 5MiB..5GiB range).
+  BLOB_CACHE_PART_SIZE?: string;
+  // How long (ms) a tracked upload may make no progress before the cron cleanup aborts+restarts it (default 5min).
+  BLOB_CACHE_STALE_ABORT_MS?: string;
+  // Sliding-window size: how many "upload-part" messages are kept in flight per blob (default 6).
+  BLOB_CACHE_MAX_CONCURRENT_PARTS?: string;
 }
 
 const router = Router();
@@ -93,6 +105,17 @@ export default {
 
     console.error(`Received a batch from an unhandled queue: ${batch.queue}`);
     batch.retryAll();
+  },
+
+  // Cron-triggered cleanup of the background blob cache: completes, restarts, or leaves alone every
+  // tracked multipart upload so large layers eventually finish caching and stalled uploads are never
+  // orphaned. No-op when no blob cache uploads are in flight.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      handleBlobCacheCleanup(env).catch((err) => {
+        console.error("blob-cache cleanup failed:", err);
+      }),
+    );
   },
 } satisfies ExportedHandler<Env>;
 

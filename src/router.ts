@@ -421,7 +421,7 @@ v2Router.get("/:name+/blobs/:digest", async (req, env: Env, context: ExecutionCo
         // as a multipart upload using ranged reads from the upstream. We deliberately don't tee the
         // body here so the client's download isn't throttled or held back by the cache write.
         context.waitUntil(
-          env.BLOB_CACHE_QUEUE.send({ registry: registry.registry, name, digest }).catch((err) => {
+          env.BLOB_CACHE_QUEUE.send({ type: "start", registry: registry.registry, name, digest }).catch((err) => {
             console.error("Error enqueuing background cache job for layer", digest, ":", errorString(err));
           }),
         );

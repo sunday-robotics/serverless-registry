@@ -20,13 +20,31 @@
         "JWT_REGISTRY_TOKENS_PUBLIC_KEY": "",
       },
       // Optional: background caching of pull-through layers that are too big (>5GiB) to cache inline.
-      // The Worker enqueues a small job (registry/name/digest) and the queue consumer streams the
-      // blob into R2 as a multipart upload. Create the queue first:
+      // A large layer is streamed into R2 as a resumable multipart upload, split across many small,
+      // idempotent queue messages (start -> upload-part* -> finalize) coordinated by a metadata
+      // object in R2. A Cron Trigger periodically completes, restarts, or leaves alone every tracked
+      // upload so nothing is ever orphaned. Create the queue first:
       //   npx wrangler queues create blob-cache
       // "queues": {
+      //   // max_concurrency spreads the upload-part messages of a single large blob across invocations.
       //   "producers": [{ "binding": "BLOB_CACHE_QUEUE", "queue": "blob-cache" }],
-      //   "consumers": [{ "queue": "blob-cache", "max_batch_size": 1, "max_retries": 5 }]
+      //   "consumers": [{ "queue": "blob-cache", "max_batch_size": 10, "max_retries": 5, "max_concurrency": 6 }]
       // },
+      // Cron Trigger that runs the cleanup (`scheduled` handler). Required for reliable large-blob caching.
+      // "triggers": { "crons": ["*/2 * * * *"] },
+      // Optional tuning knobs (defaults shown). See src/registry/cache.ts.
+      // "vars": {
+      //   "BLOB_CACHE_PART_SIZE": "268435456",     // 256MiB per part
+      //   "BLOB_CACHE_STALE_ABORT_MS": "300000",   // abort+restart uploads idle for >5min
+      //   "BLOB_CACHE_MAX_CONCURRENT_PARTS": "6"   // upload-part messages in flight per blob
+      // },
+      //
+      // STRONGLY RECOMMENDED backstop: add an R2 lifecycle rule on the bucket to
+      // "Abort incomplete multipart uploads" after ~1 day. The Workers R2 binding cannot list/abort
+      // multipart uploads that were never tracked (e.g. from a crash before metadata was written),
+      // so the lifecycle rule is the only way to reclaim those. Configure it in the R2 dashboard or:
+      //   npx wrangler r2 bucket lifecycle add <bucket> --prefix "" --abort-multipart-days 1
+      //
       // Secrets:
       // USERNAME/PASSWORD/READONLY_USERNAME/READONLY_PASSWORD if you want username/password based auth
     },
