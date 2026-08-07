@@ -5,10 +5,11 @@ import { Env } from "..";
 import { RegistryTokens } from "../src/token";
 import { RegistryAuthProtocolTokenPayload } from "../src/auth";
 import { registries } from "../src/registry/registry";
-import type { ReferrerDescriptor } from "../src/registry/registry";
+import type { ReferrerDescriptor, Registry, GetLayerResponse, BlobRangeRequest } from "../src/registry/registry";
 import { isDockerDotIO, RegistryHTTPClient } from "../src/registry/http";
 import { ManifestSchema } from "../src/manifest";
 import { limit } from "../src/chunk";
+import { R2Registry } from "../src/registry/r2";
 import worker from "../index";
 import { env } from "cloudflare:workers";
 import { createExecutionContext, reset, waitOnExecutionContext } from "cloudflare:test";
@@ -2427,6 +2428,67 @@ describe("blob range requests", () => {
     const res = await fetch(createRequest("HEAD", `/v2/${name}/blobs/${digest}`, null));
     expect(res.ok).toBeTruthy();
     expect(res.headers.get("accept-ranges")).toEqual("bytes");
+  });
+});
+
+describe("background layer caching", () => {
+  // A fake upstream registry that serves ranged reads from an in-memory buffer, mimicking GHCR.
+  function fakeUpstream(bytes: Uint8Array, digest: string, honorRange = true): Registry {
+    return {
+      async getLayer(_name: string, _digest: string, range?: BlobRangeRequest): Promise<GetLayerResponse> {
+        if (range === undefined || !honorRange) {
+          return { stream: new Blob([bytes]).stream(), size: bytes.length, digest };
+        }
+
+        const end = range.end ?? bytes.length - 1;
+        const slice = bytes.slice(range.offset, end + 1);
+        return {
+          stream: new Blob([slice]).stream(),
+          size: bytes.length,
+          digest,
+          contentRange: { start: range.offset, end, size: bytes.length },
+        };
+      },
+    } as unknown as Registry;
+  }
+
+  test("multipartUpload caches a blob via multipart and verifies its digest", async () => {
+    const bindings = env as Env;
+    const name = "cache-mp";
+    const content = "the quick brown fox jumps over the lazy dog, repeated a few times over.";
+    const bytes = new TextEncoder().encode(content);
+    const digest = await getSHA256(content);
+
+    const r2 = new R2Registry(bindings);
+    const result = await r2.multipartUpload(name, digest, bytes.length, fakeUpstream(bytes, digest));
+    expect("response" in result).toBeFalsy();
+
+    // The blob is readable through the normal GET path and matches the original bytes.
+    const res = await fetch(createRequest("GET", `/v2/${name}/blobs/${digest}`, null));
+    expect(res.ok).toBeTruthy();
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(bytes);
+
+    // The temporary multipart object was cleaned up.
+    const temp = await bindings.REGISTRY.head(`${name}/blobs/uploads/_cache-${digest}`);
+    expect(temp).toBeNull();
+
+    await bindings.REGISTRY.delete(`${name}/blobs/${digest}`);
+  });
+
+  test("multipartUpload refuses to cache when the upstream ignores the range", async () => {
+    const bindings = env as Env;
+    const name = "cache-norange";
+    const content = "upstream that does not support ranged reads";
+    const bytes = new TextEncoder().encode(content);
+    const digest = await getSHA256(content);
+
+    const r2 = new R2Registry(bindings);
+    const result = await r2.multipartUpload(name, digest, bytes.length, fakeUpstream(bytes, digest, false));
+    expect("response" in result).toBeTruthy();
+
+    // Nothing was written to the content-addressable key.
+    const cached = await bindings.REGISTRY.head(`${name}/blobs/${digest}`);
+    expect(cached).toBeNull();
   });
 });
 

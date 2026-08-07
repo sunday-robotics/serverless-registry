@@ -19,6 +19,14 @@
       "vars": {
         "JWT_REGISTRY_TOKENS_PUBLIC_KEY": "",
       },
+      // Optional: background caching of pull-through layers that are too big (>5GiB) to cache inline.
+      // The Worker enqueues a small job (registry/name/digest) and the queue consumer streams the
+      // blob into R2 as a multipart upload. Create the queue first:
+      //   npx wrangler queues create blob-cache
+      // "queues": {
+      //   "producers": [{ "binding": "BLOB_CACHE_QUEUE", "queue": "blob-cache" }],
+      //   "consumers": [{ "queue": "blob-cache", "max_batch_size": 1, "max_retries": 5 }]
+      // },
       // Secrets:
       // USERNAME/PASSWORD/READONLY_USERNAME/READONLY_PASSWORD if you want username/password based auth
     },

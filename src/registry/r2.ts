@@ -4,6 +4,7 @@ import {
   MINIMUM_CHUNK,
   MAXIMUM_CHUNK_UPLOAD_SIZE,
   MAXIMUM_CHUNK,
+  CACHE_PART_SIZE,
   getChunkBlob,
   getHelperR2Path,
   limit,
@@ -1140,6 +1141,81 @@ export class R2Registry implements Registry {
     return {
       digest: sha256,
       location: `/v2/${namespace}/blobs/${sha256}`,
+    };
+  }
+
+  // Streams a large blob into R2 using a multipart upload, pulling the bytes from `source` in
+  // ranged reads of CACHE_PART_SIZE. This is how the background cache job stores layers that are
+  // bigger than MAXIMUM_CHUNK (5GiB), which a single R2 put cannot handle.
+  async multipartUpload(
+    namespace: string,
+    digest: string,
+    size: number,
+    source: Registry,
+  ): Promise<FinishedUploadObject | RegistryError> {
+    if (!isValidDigest(digest)) {
+      return { response: new ServerError("invalid digest for cache upload") };
+    }
+
+    if (size <= 0) {
+      return { response: new ServerError("cannot cache a layer of unknown or zero size") };
+    }
+
+    // Deterministic temp key so a retried job overwrites its own in-progress data instead of leaking objects.
+    const tempKey = `${namespace}/blobs/uploads/_cache-${digest}`;
+    const upload = await this.env.REGISTRY.createMultipartUpload(tempKey);
+    const [, uploadErr] = await wrap(
+      (async () => {
+        const parts: R2UploadedPart[] = [];
+        let partNumber = 1;
+        for (let offset = 0; offset < size; offset += CACHE_PART_SIZE) {
+          const end = Math.min(offset + CACHE_PART_SIZE, size) - 1;
+          const partLength = end - offset + 1;
+          const res = await source.getLayer(namespace, digest, { offset, end });
+          if ("response" in res) {
+            throw new Error(`upstream returned status ${res.response.status} while caching layer`);
+          }
+
+          // The upstream must honor the range; a 200 (full body) would corrupt the multipart layout.
+          if (res.contentRange === undefined || res.contentRange.start !== offset || res.contentRange.end !== end) {
+            await res.stream.cancel().catch(() => {});
+            throw new Error("upstream does not support ranged reads; cannot cache large layer");
+          }
+
+          const uploaded = await upload.uploadPart(partNumber, limit(res.stream, partLength));
+          parts.push(uploaded);
+          partNumber++;
+        }
+
+        await upload.complete(parts);
+      })(),
+    );
+
+    if (uploadErr) {
+      await upload.abort().catch(() => {});
+      return wrapError("multipartUpload", uploadErr);
+    }
+
+    // Re-put content-addressably so R2 verifies the sha256 natively (same pattern as finishUpload).
+    // A checksum mismatch fails the put, so a corrupt/partial blob is never exposed.
+    const obj = await this.env.REGISTRY.get(tempKey);
+    if (obj === null) {
+      return { response: new InternalError() };
+    }
+
+    const [, putErr] = await wrap(
+      this.env.REGISTRY.put(`${namespace}/blobs/${digest}`, obj.body, {
+        sha256: digest.slice(SHA256_PREFIX_LEN),
+      }),
+    );
+    await this.env.REGISTRY.delete(tempKey).catch(() => {});
+    if (putErr) {
+      return wrapError("multipartUpload", putErr);
+    }
+
+    return {
+      digest,
+      location: `/v2/${namespace}/blobs/${digest}`,
     };
   }
 

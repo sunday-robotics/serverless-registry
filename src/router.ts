@@ -416,21 +416,32 @@ v2Router.get("/:name+/blobs/:digest", async (req, env: Env, context: ExecutionCo
     // R2 as if it were the complete blob, or the cached object would be corrupt.
     if (range === undefined && layerResponse.contentRange === undefined) {
       const fullLayer = layerResponse;
-      const [s1, s2] = fullLayer.stream.tee();
-      fullLayer.stream = s1;
-      context.waitUntil(
-        (async () => {
-          const [response, err] = await wrap(env.REGISTRY_CLIENT.monolithicUpload(name, digest, s2, fullLayer.size));
-          if (err) {
-            console.error("Error uploading asynchronously the layer ", digest, "into main registry");
-            return;
-          }
+      if (fullLayer.size > MAXIMUM_CHUNK && env.BLOB_CACHE_QUEUE !== undefined) {
+        // Too big for a single R2 put. Hand it off to the background queue, which streams it into R2
+        // as a multipart upload using ranged reads from the upstream. We deliberately don't tee the
+        // body here so the client's download isn't throttled or held back by the cache write.
+        context.waitUntil(
+          env.BLOB_CACHE_QUEUE.send({ registry: registry.registry, name, digest }).catch((err) => {
+            console.error("Error enqueuing background cache job for layer", digest, ":", errorString(err));
+          }),
+        );
+      } else {
+        const [s1, s2] = fullLayer.stream.tee();
+        fullLayer.stream = s1;
+        context.waitUntil(
+          (async () => {
+            const [response, err] = await wrap(env.REGISTRY_CLIENT.monolithicUpload(name, digest, s2, fullLayer.size));
+            if (err) {
+              console.error("Error uploading asynchronously the layer ", digest, "into main registry");
+              return;
+            }
 
-          if (response === false) {
-            console.error("Layer might be too big for the registry client", fullLayer.size);
-          }
-        })(),
-      );
+            if (response === false) {
+              console.error("Layer might be too big for the registry client", fullLayer.size);
+            }
+          })(),
+        );
+      }
     }
 
     break;

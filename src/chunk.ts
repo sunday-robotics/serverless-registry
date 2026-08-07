@@ -11,6 +11,10 @@ export const MAXIMUM_CHUNK = MINIMUM_CHUNK * 1024;
 // 100MB
 export const MAXIMUM_CHUNK_UPLOAD_SIZE = 1000 * 1000 * 100;
 
+// 1GiB - part size used by the background multipart caching of large pull-through layers.
+// Must be >= MINIMUM_CHUNK (R2 multipart minimum part size) and <= MAXIMUM_CHUNK (single part max).
+export const CACHE_PART_SIZE = 1024 * 1024 * 1024;
+
 export const getHelperR2Path = (id: string): string => {
   return `${id}-helper`;
 };
