@@ -150,6 +150,52 @@ REGISTRIES_JSON = "[{ \"registry\": \"https://index.docker.io/\" }]"
 
 You can also set your `docker.io` credentials in the configuration to not have any rate-limiting.
 
+#### Caching large layers in the background
+
+When a layer is pulled through the fallback, it is copied into your R2 bucket so the next pull is
+served directly from R2. Layers up to 5GiB are cached inline during that first pull. Larger layers
+can't be written to R2 in a single operation, so they are instead cached by a background job backed
+by [Cloudflare Queues](https://developers.cloudflare.com/queues/): the pull is served immediately,
+and the Worker enqueues a small job (registry, name, digest) whose consumer streams the layer into
+R2 as a multipart upload, reading from the upstream registry in ranges. This step is optional — if
+the queue is not configured, large layers are simply served from the fallback on every pull without
+being cached.
+
+To enable it, create the queue and bind it in your wrangler config as both a producer and a
+consumer:
+
+```bash
+$ npx wrangler queues create blob-cache
+```
+
+```jsonc
+// wrangler.jsonc
+"env": {
+  "production": {
+    "queues": {
+      "producers": [{ "binding": "BLOB_CACHE_QUEUE", "queue": "blob-cache" }],
+      "consumers": [{ "queue": "blob-cache", "max_batch_size": 1, "max_retries": 5 }]
+    }
+  }
+}
+```
+
+```toml
+# wrangler.toml
+[[env.production.queues.producers]]
+binding = "BLOB_CACHE_QUEUE"
+queue = "blob-cache"
+
+[[env.production.queues.consumers]]
+queue = "blob-cache"
+max_batch_size = 1
+max_retries = 5
+```
+
+The binding name must be `BLOB_CACHE_QUEUE` and the queue name must match the one used in code
+(`blob-cache`). The upstream registry must support ranged reads (`Range` requests); if it doesn't,
+the large layer is not cached.
+
 ### Known limitations
 
 Right now there is some limitations with this container registry.
