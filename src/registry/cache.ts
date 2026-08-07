@@ -5,9 +5,15 @@ import { R2Registry } from "./r2";
 import { RegistryHTTPClient } from "./http";
 import { registries } from "./registry";
 
-// Name of the queue this consumer serves; must match the `queue` field in the wrangler config.
+// Default name of the queue this consumer serves; must match the `queue` field in the wrangler config.
 // Used to guard the shared `queue()` handler against messages from other queues added in the future.
-export const BLOB_CACHE_QUEUE_NAME = "blob-cache";
+export const DEFAULT_BLOB_CACHE_QUEUE_NAME = "blob-cache";
+
+// Resolves the queue name this deployment consumes. Deployments that share a Cloudflare account can
+// override it via the BLOB_CACHE_QUEUE_NAME var so each uses a distinct, non-colliding queue.
+export function blobCacheQueueName(env: Env): string {
+  return env.BLOB_CACHE_QUEUE_NAME ?? DEFAULT_BLOB_CACHE_QUEUE_NAME;
+}
 
 // Message enqueued by the pull-through fallback when a proxied layer is too big to cache inline.
 // It carries only a reference (Queue messages are size-limited), never the blob bytes; the consumer

@@ -8,7 +8,7 @@ import v2Router from "./src/router";
 import { authenticationMethodFromEnv } from "./src/authentication-method";
 import { Registry } from "./src/registry/registry";
 import { R2Registry } from "./src/registry/r2";
-import { BlobCacheMessage, handleBlobCacheBatch, BLOB_CACHE_QUEUE_NAME } from "./src/registry/cache";
+import { BlobCacheMessage, handleBlobCacheBatch, blobCacheQueueName } from "./src/registry/cache";
 
 // A full compatibility mode means that the r2 registry will try its best to
 // help the client on the layer push. See how we let the client push layers with chunked uploads for more information.
@@ -27,6 +27,8 @@ export interface Env {
   REGISTRY_CLIENT: Registry;
   // Optional queue that receives background cache jobs for pull-through layers too big to cache inline.
   BLOB_CACHE_QUEUE?: Queue<BlobCacheMessage>;
+  // Optional override for the blob cache queue name; defaults to "blob-cache".
+  BLOB_CACHE_QUEUE_NAME?: string;
 }
 
 const router = Router();
@@ -84,15 +86,13 @@ export default {
   },
 
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    switch (batch.queue) {
-      case BLOB_CACHE_QUEUE_NAME:
-        await handleBlobCacheBatch(batch, env);
-        return;
-      default:
-        console.error(`Received a batch from an unhandled queue: ${batch.queue}`);
-        batch.retryAll();
-        return;
+    if (batch.queue === blobCacheQueueName(env)) {
+      await handleBlobCacheBatch(batch, env);
+      return;
     }
+
+    console.error(`Received a batch from an unhandled queue: ${batch.queue}`);
+    batch.retryAll();
   },
 } satisfies ExportedHandler<Env>;
 
