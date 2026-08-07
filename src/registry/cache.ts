@@ -5,6 +5,10 @@ import { R2Registry } from "./r2";
 import { RegistryHTTPClient } from "./http";
 import { registries } from "./registry";
 
+// Name of the queue this consumer serves; must match the `queue` field in the wrangler config.
+// Used to guard the shared `queue()` handler against messages from other queues added in the future.
+export const BLOB_CACHE_QUEUE_NAME = "blob-cache";
+
 // Message enqueued by the pull-through fallback when a proxied layer is too big to cache inline.
 // It carries only a reference (Queue messages are size-limited), never the blob bytes; the consumer
 // re-fetches the layer from the upstream registry in ranges.

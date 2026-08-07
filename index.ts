@@ -8,7 +8,7 @@ import v2Router from "./src/router";
 import { authenticationMethodFromEnv } from "./src/authentication-method";
 import { Registry } from "./src/registry/registry";
 import { R2Registry } from "./src/registry/r2";
-import { BlobCacheMessage, handleBlobCacheBatch } from "./src/registry/cache";
+import { BlobCacheMessage, handleBlobCacheBatch, BLOB_CACHE_QUEUE_NAME } from "./src/registry/cache";
 
 // A full compatibility mode means that the r2 registry will try its best to
 // help the client on the layer push. See how we let the client push layers with chunked uploads for more information.
@@ -84,7 +84,15 @@ export default {
   },
 
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-    await handleBlobCacheBatch(batch, env);
+    switch (batch.queue) {
+      case BLOB_CACHE_QUEUE_NAME:
+        await handleBlobCacheBatch(batch, env);
+        return;
+      default:
+        console.error(`Received a batch from an unhandled queue: ${batch.queue}`);
+        batch.retryAll();
+        return;
+    }
   },
 } satisfies ExportedHandler<Env>;
 
