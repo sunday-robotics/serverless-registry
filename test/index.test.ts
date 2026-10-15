@@ -2808,3 +2808,55 @@ test("docker.io", () => {
     }
   }
 });
+
+describe("presigned blob redirects", () => {
+  const presignEnv = {
+    R2_PRESIGN_ACCOUNT_ID: "acct123",
+    R2_PRESIGN_BUCKET: "oci-registry-test",
+    R2_PRESIGN_ACCESS_KEY_ID: "AKIDEXAMPLE",
+    R2_PRESIGN_SECRET_ACCESS_KEY: "secret",
+  };
+
+  async function fetchWithPresign(r: Request): Promise<Response> {
+    r.headers.append("Authorization", usernamePasswordToAuth(username, "world"));
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(r, { ...(env as Env), ...presignEnv }, ctx);
+    await waitOnExecutionContext(ctx);
+    return res as Response;
+  }
+
+  test("cached layer redirects to a presigned R2 URL", async () => {
+    const name = "presign-cached";
+    const manifest = await generateManifest(name);
+    const [digest] = getLayersFromManifest(manifest);
+
+    const res = await fetchWithPresign(createRequest("GET", `/v2/${name}/blobs/${digest}`, null));
+    expect(res.status).toEqual(307);
+    expect(res.headers.get("docker-content-digest")).toEqual(digest);
+
+    const location = new URL(res.headers.get("location")!);
+    expect(location.host).toEqual("acct123.r2.cloudflarestorage.com");
+    expect(decodeURIComponent(location.pathname)).toEqual(`/oci-registry-test/${name}/blobs/${digest}`);
+    expect(location.searchParams.get("X-Amz-Expires")).toEqual("600");
+    expect(location.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("mounted layer redirects to the source repo's object", async () => {
+    const source = "presign-source";
+    const mounted = "presign-mounted";
+    const manifest = await generateManifest(source);
+    await mountLayersFromManifest(source, manifest, mounted);
+    const [digest] = getLayersFromManifest(manifest);
+
+    const res = await fetchWithPresign(createRequest("GET", `/v2/${mounted}/blobs/${digest}`, null));
+    expect(res.status).toEqual(307);
+    const location = new URL(res.headers.get("location")!);
+    expect(decodeURIComponent(location.pathname)).toEqual(`/oci-registry-test/${source}/blobs/${digest}`);
+  });
+
+  test("uncached layer falls through to the streaming path", async () => {
+    const digest = numberedDigest(1);
+    const res = await fetchWithPresign(createRequest("GET", `/v2/presign-missing/blobs/${digest}`, null));
+    expect(res.status).toEqual(404);
+  });
+});

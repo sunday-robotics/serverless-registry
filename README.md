@@ -238,6 +238,28 @@ under the 128MB memory cap. A 5GiB layer becomes ~20 parts.
 > $ npx wrangler r2 bucket lifecycle add <bucket> --prefix "" --abort-multipart-days 1
 > ```
 
+#### Redirecting blob pulls to presigned R2 URLs
+
+By default the Worker streams every layer to the client. With presigning on, a `GET` for a layer
+that is already in R2 returns `307` to a short-lived presigned URL on R2's S3 endpoint, and the
+client downloads from R2 directly. Layers not yet in R2 still stream through the fallback.
+
+Create an R2 API token with **Object Read only** on the registry bucket, then:
+
+```bash
+$ npx wrangler secret put R2_PRESIGN_ACCESS_KEY_ID --env production
+$ npx wrangler secret put R2_PRESIGN_SECRET_ACCESS_KEY --env production
+```
+
+```toml
+[env.production.vars]
+R2_PRESIGN_ACCOUNT_ID = "<account id>"
+R2_PRESIGN_BUCKET = "<bucket name>"
+# R2_PRESIGN_TTL_SECONDS = "600"
+```
+
+Clients must be able to reach `<account id>.r2.cloudflarestorage.com`.
+
 ### Known limitations
 
 Right now there is some limitations with this container registry.
