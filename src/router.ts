@@ -20,6 +20,7 @@ import {
 } from "./registry/registry";
 import { RegistryHTTPClient } from "./registry/http";
 import { ociImageIndexContentType } from "./registry/r2";
+import { presignedLayerUrl } from "./registry/presign";
 
 const maxReferrersListLimit = 1000;
 const isOpaqueReferrersCursor = (cursor: string) => cursor.startsWith("/v2/");
@@ -400,6 +401,17 @@ function blobGetResponse(layer: GetLayerResponse): Response {
 
 v2Router.get("/:name+/blobs/:digest", async (req, env: Env, context: ExecutionContext) => {
   const { name, digest } = req.params;
+
+  // Cached in R2: send the client to R2 directly. It re-sends any Range header to the new location.
+  const presignedUrl = await presignedLayerUrl(env, name, digest);
+  if (presignedUrl !== null) {
+    return new Response(null, {
+      // 307 tells the client to follow the new Location
+      status: 307,
+      headers: { "Location": presignedUrl, "Docker-Content-Digest": digest },
+    });
+  }
+
   const range = parseBlobRange(req.headers.get("range"));
   const res = await env.REGISTRY_CLIENT.getLayer(name, digest, range);
   if (!("response" in res)) {
