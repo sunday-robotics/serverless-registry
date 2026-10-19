@@ -406,6 +406,7 @@ v2Router.get("/:name+/blobs/:digest", async (req, env: Env, context: ExecutionCo
   const presignedUrl = await presignedLayerUrl(env, name, digest);
   if (presignedUrl !== null) {
     return new Response(null, {
+      // 307 tells the client to follow the new Location
       status: 307,
       headers: { "Location": presignedUrl, "Docker-Content-Digest": digest },
     });
