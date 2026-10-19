@@ -244,19 +244,27 @@ By default the Worker streams every layer to the client. With presigning on, a `
 that is already in R2 returns `307` to a short-lived presigned URL on R2's S3 endpoint, and the
 client downloads from R2 directly. Layers not yet in R2 still stream through the fallback.
 
-Create an R2 API token with **Object Read only** on the registry bucket, then:
+It is on only when all four are set:
 
-```bash
-$ npx wrangler secret put R2_PRESIGN_ACCESS_KEY_ID --env production
-$ npx wrangler secret put R2_PRESIGN_SECRET_ACCESS_KEY --env production
-```
+| Name                           | Kind   | Value                                             |
+| ------------------------------ | ------ | ------------------------------------------------- |
+| `R2_PRESIGN_BUCKET`            | var    | the bucket bound as `REGISTRY`                    |
+| `R2_PRESIGN_ACCOUNT_ID`        | secret | Cloudflare account ID                             |
+| `R2_PRESIGN_ACCESS_KEY_ID`     | secret | R2 API token, **Object Read only** on that bucket |
+| `R2_PRESIGN_SECRET_ACCESS_KEY` | secret | same token                                        |
+| `R2_PRESIGN_TTL_SECONDS`       | var    | optional, default `600`                           |
 
-```toml
-[env.production.vars]
-R2_PRESIGN_ACCOUNT_ID = "<account id>"
-R2_PRESIGN_BUCKET = "<bucket name>"
-# R2_PRESIGN_TTL_SECONDS = "600"
-```
+At Sunday, these are set by the deploy workflows in
+[sunday-cloudflare-workers](https://github.com/sunday-robotics/sunday-cloudflare-workers):
+
+1. Create the R2 token in the dashboard (R2 → Manage API tokens), scoped to the one bucket.
+2. Add its keys as GitHub secrets `R2_PRESIGN_<BETA|PROD>_ACCESS_KEY_ID` and
+   `R2_PRESIGN_<BETA|PROD>_SECRET_ACCESS_KEY` in sunday-cloudflare-workers.
+3. Put `R2_PRESIGN_BUCKET` in that environment's `wrangler.jsonc` `vars`.
+
+The workflow's "Set R2 presign secrets" step writes the secrets, with the account ID taken from
+`CLOUDFLARE_ACCOUNT_ID`. To turn redirects off, delete `R2_PRESIGN_ACCESS_KEY_ID` from the Worker
+(immediate) and from GitHub secrets (or the next deploy sets it again).
 
 Clients must be able to reach `<account id>.r2.cloudflarestorage.com`.
 
