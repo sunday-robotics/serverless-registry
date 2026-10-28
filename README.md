@@ -262,7 +262,7 @@ values. To turn on redirects for an environment:
 
 1. In the Cloudflare dashboard, go to R2 → Manage API tokens. Make a token for the one bucket.
 2. In sunday-cloudflare-workers, add the token keys as GitHub secrets
-   `R2_PRESIGN_<BETA|PROD>_ACCESS_KEY_ID` and `R2_PRESIGN_<BETA|PROD>_SECRET_ACCESS_KEY`.
+   `OCI_REGISTRY_<ALPHA|BETA|PROD>_R2_ACCESS_KEY_ID` and `OCI_REGISTRY_<ALPHA|BETA|PROD>_R2_SECRET_ACCESS_KEY`.
 3. Add `R2_PRESIGN_BUCKET` to `vars` in the `wrangler.jsonc` of that environment.
 4. Merge. The workflow deploys and sets the secrets. It uses `CLOUDFLARE_ACCOUNT_ID` for the
    account ID.
