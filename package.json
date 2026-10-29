@@ -18,10 +18,10 @@
     "@tsndr/cloudflare-worker-jwt": "^3.2.2",
     "itty-router": "^5.0.24",
     "rfc4648": "^1.5.4",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.20.1",
+    "@cloudflare/vitest-plugin": "^1.4.10",
     "@eslint/js": "^10.0.1",
     "@types/node": "26.1.2",
     "@typescript/native": "npm:typescript@^7.0.2",
@@ -29,8 +29,8 @@
     "prettier": "3.9.6",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.66.0",
-    "vitest": "^4.1.10",
-    "wrangler": "^4.118.0"
+    "vitest": "^4.1.12",
+    "wrangler": "^4.155.0"
   },
   "engines": {
     "node": ">=24.0.0",
