@@ -238,6 +238,43 @@ under the 128MB memory cap. A 5GiB layer becomes ~20 parts.
 > $ npx wrangler r2 bucket lifecycle add <bucket> --prefix "" --abort-multipart-days 1
 > ```
 
+#### Redirecting blob pulls to presigned R2 URLs
+
+The Worker sends layer data through itself by default. Cloudflare can bill this traffic. R2 has
+no egress fees.
+
+When redirects are on, a `GET` for a layer in R2 returns `307` to a presigned R2 URL. The client
+downloads the layer from R2. Layers that are not in R2 go through the Worker, as before.
+
+Redirects are on only when the first four values are set:
+
+| Name                           | Kind   | Value                                                     |
+| ------------------------------ | ------ | --------------------------------------------------------- |
+| `R2_PRESIGN_BUCKET`            | var    | Bucket name. Must be the same as the `REGISTRY` binding.  |
+| `R2_PRESIGN_ACCOUNT_ID`        | secret | Cloudflare account ID                                     |
+| `R2_PRESIGN_ACCESS_KEY_ID`     | secret | R2 API token with **Object Read only** on the one bucket. |
+| `R2_PRESIGN_SECRET_ACCESS_KEY` | secret | Secret key of the same token                              |
+| `R2_PRESIGN_TTL_SECONDS`       | var    | URL lifetime in seconds. Optional. Default `600`.         |
+
+At Sunday, the deploy workflows in
+[sunday-cloudflare-workers](https://github.com/sunday-robotics/sunday-cloudflare-workers) set these
+values. To turn on redirects for an environment:
+
+1. In the Cloudflare dashboard, go to R2 → Manage API tokens. Make a token for the one bucket.
+2. In sunday-cloudflare-workers, add the token keys as GitHub secrets
+   `OCI_REGISTRY_<ALPHA|BETA|PROD>_R2_ACCESS_KEY_ID` and
+   `OCI_REGISTRY_<ALPHA|BETA|PROD>_R2_SECRET_ACCESS_KEY`.
+3. Add `R2_PRESIGN_BUCKET` to `vars` in the `wrangler.jsonc` of that environment.
+4. If the environment's workflow has no _Set R2 presign secrets_ step, copy it from
+   `sunday-oci-registry-alpha.yml`.
+5. Merge. The workflow deploys and sets the secrets. It uses `CLOUDFLARE_ACCOUNT_ID` for the
+   account ID.
+
+To turn off redirects, delete `R2_PRESIGN_ACCESS_KEY_ID` from the Worker. This has an immediate
+effect. Also delete it from GitHub secrets. If you do not, the next deploy sets it again.
+
+Clients must have access to `<account id>.r2.cloudflarestorage.com`.
+
 ### Known limitations
 
 Right now there is some limitations with this container registry.

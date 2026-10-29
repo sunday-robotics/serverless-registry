@@ -41,6 +41,13 @@ export interface Env {
   BLOB_CACHE_STALE_ABORT_MS?: string;
   // Sliding-window size: how many "upload-part" messages are kept in flight per blob (default 6).
   BLOB_CACHE_MAX_CONCURRENT_PARTS?: string;
+  // Optional: redirect cached blob GETs to presigned R2 URLs. On only when the first four are set.
+  R2_PRESIGN_ACCOUNT_ID?: string;
+  R2_PRESIGN_BUCKET?: string;
+  R2_PRESIGN_ACCESS_KEY_ID?: string;
+  R2_PRESIGN_SECRET_ACCESS_KEY?: string;
+  // Presigned URL lifetime in seconds (default 600).
+  R2_PRESIGN_TTL_SECONDS?: string;
 }
 
 const router = Router();
