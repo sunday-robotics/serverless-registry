@@ -18,3 +18,5 @@ minimumReleaseAgeExclude:
 # Don't install 3.2.2 due to https://github.com/tsndr/cloudflare-worker-jwt/issues/97
 overrides:
   "@tsndr/cloudflare-worker-jwt@3.2.2": "3.2.1"
+  # vitest's lockfile entry holds vite at 8.2.0 (GHSA-9jrq-w75r-8gcw and others)
+  "vite@<8.2.4": "^8.3.5"

@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "types": ["../worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types", "node"],
+    "types": ["../worker-configuration.d.ts", "@cloudflare/vitest-plugin/types", "node"],
     "module": "esnext",
     "target": "esnext",
     "lib": ["esnext"],
