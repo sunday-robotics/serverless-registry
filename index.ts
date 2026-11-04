@@ -41,12 +41,12 @@ export interface Env {
   BLOB_CACHE_STALE_ABORT_MS?: string;
   // Sliding-window size: how many "upload-part" messages are kept in flight per blob (default 6).
   BLOB_CACHE_MAX_CONCURRENT_PARTS?: string;
-  // Optional: redirect pulls of layers stored in R2 to presigned R2 URLs. On when all four are set.
+  // Optional: redirect pulls of layers in R2 to presigned R2 URLs. On when all four are set.
   R2_PRESIGN_ACCOUNT_ID?: string;
-  R2_PRESIGN_BUCKET?: string; // the bucket bound as REGISTRY
+  R2_PRESIGN_BUCKET?: string; // the bucket that is bound as REGISTRY
   R2_PRESIGN_ACCESS_KEY_ID?: string;
   R2_PRESIGN_SECRET_ACCESS_KEY?: string;
-  R2_PRESIGN_TTL_SECONDS?: string; // default 600, max 7 days
+  R2_PRESIGN_TTL_SECONDS?: string; // default 600, maximum 7 days
 }
 
 const router = Router();

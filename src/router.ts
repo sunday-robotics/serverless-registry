@@ -402,8 +402,8 @@ function blobGetResponse(layer: GetLayerResponse): Response {
 v2Router.get("/:name+/blobs/:digest", async (req, env: Env, context: ExecutionContext) => {
   const { name, digest } = req.params;
 
-  // Layers stored in R2 can be fetched from R2 directly. A 307 keeps the method, and the client
-  // re-sends its Range header to the new location.
+  // A layer in R2 can be downloaded from R2 directly. A 307 keeps the method. The client sends its
+  // Range header again to the new location.
   const presignedUrl = await presignedLayerUrl(env, name, digest);
   if (presignedUrl !== null) {
     return new Response(null, {

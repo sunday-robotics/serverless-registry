@@ -238,30 +238,31 @@ under the 128MB memory cap. A 5GiB layer becomes ~20 parts.
 > $ npx wrangler r2 bucket lifecycle add <bucket> --prefix "" --abort-multipart-days 1
 > ```
 
-#### Redirecting blob pulls to presigned R2 URLs
+#### Redirect blob pulls to presigned R2 URLs
 
-By default, layer data is streamed through the Worker. R2 has no egress fees, so clients can
-download layers from R2 directly instead.
+By default, the Worker sends layer data to the client. R2 does not charge for egress. The client
+can download layer data from R2 directly.
 
-When redirects are on, a `GET` for a layer in R2 returns `307` to a presigned R2 URL. Layers not in
-R2 are served through the Worker as before.
+When redirects are on, a `GET` for a layer in R2 returns `307`. The `Location` header is a presigned
+R2 URL. The client downloads the layer from R2. If a layer is not in R2, the Worker sends the layer
+data.
 
-Redirects are on when the first four values are set. If only some are set, redirects stay off and
-the Worker logs which are missing.
+Redirects are on when all four values in the table are set. If only some values are set, redirects
+are off. The Worker writes the names of the missing values to the log.
 
-| Name                           | Kind   | Value                                                               |
-| ------------------------------ | ------ | ------------------------------------------------------------------- |
-| `R2_PRESIGN_ACCOUNT_ID`        | var    | Cloudflare account ID                                               |
-| `R2_PRESIGN_BUCKET`            | var    | Bucket name. Must be the bucket bound as `REGISTRY`.                |
-| `R2_PRESIGN_ACCESS_KEY_ID`     | secret | Access key ID of an R2 API token                                    |
-| `R2_PRESIGN_SECRET_ACCESS_KEY` | secret | Secret access key of the same token                                 |
-| `R2_PRESIGN_TTL_SECONDS`       | var    | URL lifetime in seconds. Optional. Default `600`. Capped at 7 days. |
+| Name                           | Kind   | Value                                                                    |
+| ------------------------------ | ------ | ------------------------------------------------------------------------ |
+| `R2_PRESIGN_ACCOUNT_ID`        | var    | Cloudflare account ID                                                    |
+| `R2_PRESIGN_BUCKET`            | var    | Name of the bucket that is bound as `REGISTRY`                           |
+| `R2_PRESIGN_ACCESS_KEY_ID`     | secret | Access key ID of an R2 API token                                         |
+| `R2_PRESIGN_SECRET_ACCESS_KEY` | secret | Secret access key of the same token                                      |
+| `R2_PRESIGN_TTL_SECONDS`       | var    | Lifetime of the URL in seconds. Optional. Default `600`. Maximum 7 days. |
 
-To turn them on:
+To turn on redirects:
 
-1. In the Cloudflare dashboard, go to R2 → Manage API tokens and create a token with **Object Read
-   only** permission, scoped to the registry bucket.
-2. Set the vars in `wrangler.jsonc` / `wrangler.toml` (see `wrangler.example.*`).
+1. In the Cloudflare dashboard, go to R2 → Manage API tokens. Make a token with the **Object Read
+   only** permission. Limit the token to the registry bucket.
+2. Set the vars in `wrangler.jsonc` or `wrangler.toml`. See `wrangler.example.*`.
 3. Set the secrets:
 
    ```bash
@@ -269,10 +270,10 @@ To turn them on:
    $ npx wrangler secret put R2_PRESIGN_SECRET_ACCESS_KEY --env production
    ```
 
-To turn them off, delete either secret (`npx wrangler secret delete ...`). This takes effect
-immediately.
+To turn off redirects, delete one of the secrets with `npx wrangler secret delete`. The change is
+immediate.
 
-Clients must be able to reach `<account id>.r2.cloudflarestorage.com`.
+The client must have network access to `<account id>.r2.cloudflarestorage.com`.
 
 ### Known limitations
 

@@ -4,7 +4,7 @@ import { errorString, wrap } from "../utils";
 import { symlinkHeader } from "./r2";
 
 const defaultTtlSeconds = 10 * 60;
-const maxTtlSeconds = 7 * 24 * 60 * 60; // SigV4 limit on X-Amz-Expires
+const maxTtlSeconds = 7 * 24 * 60 * 60; // SigV4 maximum for X-Amz-Expires
 const requiredVars = [
   "R2_PRESIGN_ACCOUNT_ID",
   "R2_PRESIGN_BUCKET",
@@ -20,15 +20,15 @@ export type PresignConfig = {
   ttlSeconds: number;
 };
 
-// undefined means redirects are off. Setting only some of the required vars is a misconfiguration,
-// not an opt-out, so it is logged and treated as off.
+// undefined means that redirects are off. If only some of the required vars are set, the
+// configuration is incorrect. Write the missing names to the log and keep redirects off.
 export function presignConfig(env: Env): PresignConfig | undefined {
   const missing = requiredVars.filter((name) => !env[name]);
   if (missing.length === requiredVars.length) {
     return undefined;
   }
   if (missing.length > 0) {
-    console.error(`Presigned redirects are misconfigured, missing: ${missing.join(", ")}`);
+    console.error(`Presigned redirects are off. Missing: ${missing.join(", ")}`);
     return undefined;
   }
 
@@ -44,8 +44,8 @@ export function presignConfig(env: Env): PresignConfig | undefined {
   };
 }
 
-// Presigned R2 URL for a layer stored in the bucket, or null when redirects are off or the layer
-// has to be served through the Worker (not in R2, or the R2 lookup failed).
+// Returns a presigned R2 URL for a layer in the bucket. Returns null if redirects are off, the
+// layer is not in R2, or the R2 lookup failed. Then the Worker sends the layer data.
 export async function presignedLayerUrl(env: Env, name: string, digest: string): Promise<string | null> {
   const config = presignConfig(env);
   if (config === undefined) {
@@ -54,15 +54,15 @@ export async function presignedLayerUrl(env: Env, name: string, digest: string):
 
   const [head, err] = await wrap(env.REGISTRY.head(`${name}/blobs/${digest}`));
   if (err) {
-    console.error("Error looking up layer for presigned redirect:", errorString(err));
+    console.error("Presigned redirect: R2 lookup failed:", errorString(err));
     return null;
   }
   if (!head) {
     return null;
   }
 
-  // A mounted layer is a pointer whose metadata names the repo holding the bytes.
-  // mountExistingLayer never points at another pointer, so one hop is enough.
+  // A mounted layer is a pointer. Its metadata gives the name of the repo that holds the data.
+  // mountExistingLayer does not point to another pointer, so one hop is sufficient.
   const sourceName = head.customMetadata?.[symlinkHeader] ?? name;
 
   return await presignedGetUrl(config, `${sourceName}/blobs/${digest}`);
