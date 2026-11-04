@@ -2812,7 +2812,7 @@ test("docker.io", () => {
 describe("presigned blob redirects", () => {
   const presignEnv = {
     R2_PRESIGN_ACCOUNT_ID: "test-account-id",
-    R2_PRESIGN_BUCKET: "sunday-oci-registry-beta",
+    R2_PRESIGN_BUCKET: "registry-bucket",
     R2_PRESIGN_ACCESS_KEY_ID: "test-access-key-id",
     R2_PRESIGN_SECRET_ACCESS_KEY: "test-secret-access-key",
   };
@@ -2852,6 +2852,21 @@ describe("presigned blob redirects", () => {
     expect(res.status).toEqual(307);
     const location = new URL(res.headers.get("location")!);
     expect(decodeURIComponent(location.pathname)).toEqual(`/${presignEnv.R2_PRESIGN_BUCKET}/${source}/blobs/${digest}`);
+  });
+
+  test("partial config falls through to the streaming path", async () => {
+    const name = "presign-partial";
+    const manifest = await generateManifest(name);
+    const [digest] = getLayersFromManifest(manifest);
+
+    const r = createRequest("GET", `/v2/${name}/blobs/${digest}`, null);
+    r.headers.append("Authorization", usernamePasswordToAuth(username, "world"));
+    const ctx = createExecutionContext();
+    const partialEnv = { ...(env as Env), ...presignEnv, R2_PRESIGN_SECRET_ACCESS_KEY: undefined };
+    const res = await worker.fetch(r, partialEnv, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toEqual(200);
+    await res.arrayBuffer();
   });
 
   test("uncached layer falls through to the streaming path", async () => {

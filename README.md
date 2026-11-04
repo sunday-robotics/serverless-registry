@@ -240,40 +240,39 @@ under the 128MB memory cap. A 5GiB layer becomes ~20 parts.
 
 #### Redirecting blob pulls to presigned R2 URLs
 
-The Worker sends layer data through itself by default. Cloudflare can bill this traffic. R2 has
-no egress fees.
+By default, layer data is streamed through the Worker. R2 has no egress fees, so clients can
+download layers from R2 directly instead.
 
-When redirects are on, a `GET` for a layer in R2 returns `307` to a presigned R2 URL. The client
-downloads the layer from R2. Layers that are not in R2 go through the Worker, as before.
+When redirects are on, a `GET` for a layer in R2 returns `307` to a presigned R2 URL. Layers not in
+R2 are served through the Worker as before.
 
-Redirects are on only when the first four values are set:
+Redirects are on when the first four values are set. If only some are set, redirects stay off and
+the Worker logs which are missing.
 
-| Name                           | Kind   | Value                                                     |
-| ------------------------------ | ------ | --------------------------------------------------------- |
-| `R2_PRESIGN_BUCKET`            | var    | Bucket name. Must be the same as the `REGISTRY` binding.  |
-| `R2_PRESIGN_ACCOUNT_ID`        | secret | Cloudflare account ID                                     |
-| `R2_PRESIGN_ACCESS_KEY_ID`     | secret | R2 API token with **Object Read only** on the one bucket. |
-| `R2_PRESIGN_SECRET_ACCESS_KEY` | secret | Secret key of the same token                              |
-| `R2_PRESIGN_TTL_SECONDS`       | var    | URL lifetime in seconds. Optional. Default `600`.         |
+| Name                           | Kind   | Value                                                               |
+| ------------------------------ | ------ | ------------------------------------------------------------------- |
+| `R2_PRESIGN_ACCOUNT_ID`        | var    | Cloudflare account ID                                               |
+| `R2_PRESIGN_BUCKET`            | var    | Bucket name. Must be the bucket bound as `REGISTRY`.                |
+| `R2_PRESIGN_ACCESS_KEY_ID`     | secret | Access key ID of an R2 API token                                    |
+| `R2_PRESIGN_SECRET_ACCESS_KEY` | secret | Secret access key of the same token                                 |
+| `R2_PRESIGN_TTL_SECONDS`       | var    | URL lifetime in seconds. Optional. Default `600`. Capped at 7 days. |
 
-At Sunday, the deploy workflows in
-[sunday-cloudflare-workers](https://github.com/sunday-robotics/sunday-cloudflare-workers) set these
-values. To turn on redirects for an environment:
+To turn them on:
 
-1. In the Cloudflare dashboard, go to R2 → Manage API tokens. Make a token for the one bucket.
-2. In sunday-cloudflare-workers, add the token keys as GitHub secrets
-   `OCI_REGISTRY_<ALPHA|BETA|PROD>_R2_ACCESS_KEY_ID` and
-   `OCI_REGISTRY_<ALPHA|BETA|PROD>_R2_SECRET_ACCESS_KEY`.
-3. Add `R2_PRESIGN_BUCKET` to `vars` in the `wrangler.jsonc` of that environment.
-4. If the environment's workflow has no _Set R2 presign secrets_ step, copy it from
-   `sunday-oci-registry-alpha.yml`.
-5. Merge. The workflow deploys and sets the secrets. It uses `CLOUDFLARE_ACCOUNT_ID` for the
-   account ID.
+1. In the Cloudflare dashboard, go to R2 → Manage API tokens and create a token with **Object Read
+   only** permission, scoped to the registry bucket.
+2. Set the vars in `wrangler.jsonc` / `wrangler.toml` (see `wrangler.example.*`).
+3. Set the secrets:
 
-To turn off redirects, delete `R2_PRESIGN_ACCESS_KEY_ID` from the Worker. This has an immediate
-effect. Also delete it from GitHub secrets. If you do not, the next deploy sets it again.
+   ```bash
+   $ npx wrangler secret put R2_PRESIGN_ACCESS_KEY_ID --env production
+   $ npx wrangler secret put R2_PRESIGN_SECRET_ACCESS_KEY --env production
+   ```
 
-Clients must have access to `<account id>.r2.cloudflarestorage.com`.
+To turn them off, delete either secret (`npx wrangler secret delete ...`). This takes effect
+immediately.
+
+Clients must be able to reach `<account id>.r2.cloudflarestorage.com`.
 
 ### Known limitations
 
