@@ -39,6 +39,14 @@
       //   "BLOB_CACHE_MAX_CONCURRENT_PARTS": "6"   // upload-part messages in flight per blob
       // },
       //
+      // Optional: redirect blob pulls to presigned R2 URLs. Also set the secrets R2_PRESIGN_ACCESS_KEY_ID
+      // and R2_PRESIGN_SECRET_ACCESS_KEY. See the README.
+      // "vars": {
+      //   "R2_PRESIGN_ACCOUNT_ID": "",
+      //   "R2_PRESIGN_BUCKET": "",          // the bucket that is bound as REGISTRY
+      //   "R2_PRESIGN_TTL_SECONDS": "600"
+      // },
+      //
       // STRONGLY RECOMMENDED backstop: add an R2 lifecycle rule on the bucket to
       // "Abort incomplete multipart uploads" after ~1 day. The Workers R2 binding cannot list/abort
       // multipart uploads that were never tracked (e.g. from a crash before metadata was written),
