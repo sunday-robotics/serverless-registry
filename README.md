@@ -238,6 +238,43 @@ under the 128MB memory cap. A 5GiB layer becomes ~20 parts.
 > $ npx wrangler r2 bucket lifecycle add <bucket> --prefix "" --abort-multipart-days 1
 > ```
 
+#### Redirect blob pulls to presigned R2 URLs
+
+By default, the Worker sends layer data to the client. R2 does not charge for egress. The client
+can download layer data from R2 directly.
+
+When redirects are on, a `GET` for a layer in R2 returns `307`. The `Location` header is a presigned
+R2 URL. The client downloads the layer from R2. If a layer is not in R2, the Worker sends the layer
+data.
+
+Redirects are on when all four values in the table are set. If only some values are set, redirects
+are off. The Worker writes the names of the missing values to the log.
+
+| Name                           | Kind   | Value                                                                    |
+| ------------------------------ | ------ | ------------------------------------------------------------------------ |
+| `R2_PRESIGN_ACCOUNT_ID`        | var    | Cloudflare account ID                                                    |
+| `R2_PRESIGN_BUCKET`            | var    | Name of the bucket that is bound as `REGISTRY`                           |
+| `R2_PRESIGN_ACCESS_KEY_ID`     | secret | Access key ID of an R2 API token                                         |
+| `R2_PRESIGN_SECRET_ACCESS_KEY` | secret | Secret access key of the same token                                      |
+| `R2_PRESIGN_TTL_SECONDS`       | var    | Lifetime of the URL in seconds. Optional. Default `600`. Maximum 7 days. |
+
+To turn on redirects:
+
+1. In the Cloudflare dashboard, go to R2 → Manage API tokens. Make a token with the **Object Read
+   only** permission. Limit the token to the registry bucket.
+2. Set the vars in `wrangler.jsonc` or `wrangler.toml`. See `wrangler.example.*`.
+3. Set the secrets:
+
+   ```bash
+   $ npx wrangler secret put R2_PRESIGN_ACCESS_KEY_ID --env production
+   $ npx wrangler secret put R2_PRESIGN_SECRET_ACCESS_KEY --env production
+   ```
+
+To turn off redirects, delete one of the secrets with `npx wrangler secret delete`. The change is
+immediate.
+
+The client must have network access to `<account id>.r2.cloudflarestorage.com`.
+
 ### Known limitations
 
 Right now there is some limitations with this container registry.
